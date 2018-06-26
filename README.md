@@ -1,0 +1,1 @@
+# Siedler IV Script Editor
