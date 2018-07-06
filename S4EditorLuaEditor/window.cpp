@@ -20,6 +20,7 @@ HMENU hmenuBar = nullptr;
 HMENU hmenu = nullptr;
 // no std::map<int,std::wstring>, we need index of vector for comboBox index
 const std::vector<std::pair<unsigned short, std::wstring>> objectsArr{
+	{ 254, L"<Kein Objekt>" }, //Dunkle Spuckpflanze
 	{ 19, L"Tropische Dattelpalme" },
 	{ 20, L"Tropische Dattelpalme 2" },
 	{ 21, L"Dunkelblättrige tropische Palme" },
@@ -127,7 +128,39 @@ void toggleMapProperty(unsigned int propertyBit,bool enable)
 void selectObjectID(unsigned short objectID)
 {
 	constexpr const unsigned short DIALOG_OVERWRITE_ITEM = 315; // "Dunkle Spuckpflanze"
-	*currentSelectedItem = DIALOG_OVERWRITE_ITEM;
+	if (*currentSelectedItem != DIALOG_OVERWRITE_ITEM )
+	{
+		if (s4 != nullptr)
+		{
+			/* in s4Editor:
+				brushID*3
+				^ * 4 
+				+ brushID
+				<< 2 times ( *4)
+				+ address 
+				
+				this is in short terms brushID * 52 . why not just go with that
+				*/
+			/* "uncheck" current selected item in window */
+			unsigned long* addrOfItemInToolList = (unsigned long*)((*currentSelectedItem * 52) + (unsigned int)s4 + 0x63c38);
+			HWND* addrOfHwndToSend = (HWND*)((unsigned int)s4 + 0x6ce78);
+			constexpr const unsigned int CODE = TVM_SETITEMA;
+
+			//std::cout << std::hex << *addrOfHwndToSend << "\t" << CODE << "\t" << 0 << "\t" << addrOfItemInToolList << std::endl;
+			//std::cout << "(" << *currentSelectedItem << ")" << std::dec << std::endl;
+			// -> this marks the NEW item, we don't want that 
+			//*addrOfItemInToolList = 8;
+
+			//these two babies here "update" to the old item to be unselected
+			*(unsigned long*)((*currentSelectedItem * 52) + (unsigned int)s4 + 0x63c40) = 0;
+			*(unsigned long*)((*currentSelectedItem * 52) + (unsigned int)s4 + 0x63c44) = 0x10;
+			LRESULT res = SendMessageA(*addrOfHwndToSend, CODE, 0, (unsigned long)addrOfItemInToolList);
+			
+			//std::cout << "-> " << res << std::endl;
+
+		}
+		*currentSelectedItem = DIALOG_OVERWRITE_ITEM;
+	}
 	*objectIDSpitPlant = objectID;
 }	
 void DoSuspendThread(DWORD targetProcessId, DWORD targetThreadId)
@@ -146,12 +179,15 @@ void DoSuspendThread(DWORD targetProcessId, DWORD targetThreadId)
 					// Suspend all threads EXCEPT the one we want to keep running
 					if (te.th32ThreadID != targetThreadId && te.th32OwnerProcessID == targetProcessId)
 					{
+						//std::cout << "Found Thread ID: " << te.th32ThreadID << "\nProcess ID: " << te.th32OwnerProcessID << std::endl;
 						HANDLE thread = ::OpenThread(THREAD_ALL_ACCESS, FALSE, te.th32ThreadID);
 						if (thread != NULL)
 						{
+							//std::cout << "Suspending!" << std::endl;
 							SuspendThread(thread);
 							CloseHandle(thread);
 						}
+						//std::cout << "-----------" << std::endl;
 					}
 				}
 				te.dwSize = sizeof(te);
@@ -193,11 +229,11 @@ void DoResumeThread(DWORD targetProcessId, DWORD targetThreadId)
 
 void suspendAllThreads()
 {
-	DoSuspendThread(GetProcessId(s4), GetCurrentThreadId());
+	DoSuspendThread(GetCurrentProcessId(), GetCurrentThreadId());
 }
 void resumeAllThreads()
 {
-	DoResumeThread(GetProcessId(s4), GetCurrentThreadId());
+	DoResumeThread(GetCurrentProcessId(), GetCurrentThreadId());
 }
 void overridePreviousPlaceableSettings()
 {
@@ -205,6 +241,7 @@ void overridePreviousPlaceableSettings()
 	suspendAllThreads();
 	DWORD oldProtection;
 
+	//set code page to writeable, because stuff
 	LPVOID startPage = (LPVOID)((unsigned int)s4 + 0x1000);
 	size_t pageSize = 0x44000;
 	VirtualProtect(startPage, pageSize, PAGE_EXECUTE_READWRITE, &oldProtection);
@@ -284,7 +321,7 @@ LRESULT CALLBACK DLLWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lP
 		for (auto it = objectsArr.begin(); it != objectsArr.end(); it++) {
 			SendMessage(hwndCombobox, CB_ADDSTRING, 0, (LPARAM)(it->second.c_str()));
 		}
-
+		SendMessage(hwndCombobox, CB_SETCURSEL, 0, 0);
 
 		//SETTINGS 
 		NONCLIENTMETRICS metrics;
@@ -312,6 +349,7 @@ LRESULT CALLBACK DLLWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lP
 		WORD hwp = HIWORD(wParam);
 		WORD lwp = LOWORD(wParam);
 		//std::cout << "High wParam: " << HIWORD(wParam) << "Low wParam: " << LOWORD(wParam) << std::endl << "lparam: " << lParam << std::endl;
+		//technically meant for debug but possibly works for release too. 
 		if (!overrideOnce && lwp == IDC_OBJECTS_COMBO_BOX)
 		{
 			overrideOnce = true;
@@ -370,9 +408,20 @@ LRESULT CALLBACK DLLWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lP
 		/* NOTIFICATIONS */
 		else if (hwp == CBN_SELCHANGE)
 		{
-			int cbIndex = SendMessage((HWND)lParam, CB_GETCURSEL,NULL,NULL);
-			unsigned short objectID = objectsArr.at(cbIndex).first;
-			selectObjectID(objectID);
+			int cbIndex = SendMessage((HWND)lParam, CB_GETCURSEL, NULL, NULL);
+			if ((HWND)lParam == hwndCombobox)
+			{
+				unsigned short objectID = 19; //palm
+				try {
+					objectID = objectsArr.at(cbIndex).first;
+				}
+				//catches all exceptions but only out_of_bounds_exception yet (cbIndex = -1 when nothing is chosen)
+				catch (std::exception& ex)
+				{
+					//std::cout << "wrong index";
+				}
+				selectObjectID(objectID);
+			}
 		}
 		else
 		{
